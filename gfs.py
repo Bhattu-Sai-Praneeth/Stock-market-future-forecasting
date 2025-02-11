@@ -107,22 +107,22 @@ if filtered_indices and sectors_file and daily_files:
             if index_name in daily_data:
                 company_name = sectors_df.loc[sectors_df['Index Name'] == index_name, 'Company Name'].iloc[0] if not sectors_df[sectors_df['Index Name'] == index_name].empty else index_name
                 
-                with st.expander(f"Processing {index_name} ({company_name})"):
-                    train_r2, test_r2, future_preds = get_predicted_values(daily_data[index_name], epochs)
+                st.subheader(f"Processing {index_name} ({company_name})")
+                train_r2, test_r2, future_preds = get_predicted_values(daily_data[index_name], epochs)
                     
-                    results.append({
-                        'Run Date': current_date,
-                        'Index Name': index_name,
-                        'Company Name': company_name,
-                        'Model': 'LSTM',
-                        'Train R2 Score': train_r2,
-                        'Test R2 Score': test_r2,
-                        'Day 1': future_preds[0],
-                        'Day 2': future_preds[1],
-                        'Day 3': future_preds[2],
-                        'Day 4': future_preds[3],
-                        'Day 5': future_preds[4]
-                    })
+                results.append({
+                    'Run Date': current_date,
+                    'Index Name': index_name,
+                    'Company Name': company_name,
+                    'Model': 'LSTM',
+                    'Train R2 Score': train_r2,
+                    'Test R2 Score': test_r2,
+                    'Day 1': future_preds[0],
+                    'Day 2': future_preds[1],
+                    'Day 3': future_preds[2],
+                    'Day 4': future_preds[3],
+                    'Day 5': future_preds[4]
+                })
         
         # Display results
         if results:
