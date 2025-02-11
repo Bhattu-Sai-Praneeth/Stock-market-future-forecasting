@@ -1,19 +1,16 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import requests
-from io import StringIO
 from sklearn.metrics import r2_score
 from sklearn.preprocessing import MinMaxScaler
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import Dense, LSTM
 import datetime as dt
 import os
+import io
 
-# Set Streamlit Page Config
 st.set_page_config(page_title="Stock Prediction", layout="wide")
 
-# Function to create LSTM dataset
 def create_dataset(dataset, time_step=1):
     dataX, dataY = [], []
     for i in range(len(dataset) - time_step - 1):
@@ -22,7 +19,6 @@ def create_dataset(dataset, time_step=1):
         dataY.append(dataset[i + time_step, 0])
     return np.array(dataX), np.array(dataY)
 
-# Function to predict future values
 def predict_future(model, last_sequence, scaler, days=5):
     predictions = []
     current_sequence = last_sequence.copy()
@@ -33,20 +29,6 @@ def predict_future(model, last_sequence, scaler, days=5):
         current_sequence[-1] = next_pred
     return scaler.inverse_transform(np.array(predictions).reshape(-1, 1)).flatten()
 
-# Function to fetch daily data from GitHub
-GITHUB_REPO_URL = "https://github.com/Bhattu-Sai-Praneeth/test2/tree/main/DATASETS/Daily_data"
-
-def load_daily_data(file_name):
-    """Fetch CSV file from GitHub."""
-    url = GITHUB_REPO_URL + file_name
-    response = requests.get(url)
-    if response.status_code == 200:
-        return pd.read_csv(StringIO(response.text))
-    else:
-        st.warning(f"Could not fetch {file_name} from GitHub.")
-        return None
-
-# Function to train the LSTM model
 def get_predicted_values(data, epochs=25):
     df = data.copy()
     df['Date'] = pd.to_datetime(df['Date'])
@@ -93,30 +75,55 @@ def get_predicted_values(data, epochs=25):
     
     return train_r2, test_r2, future_preds
 
+def is_valid_github_url(url):
+    return url.startswith("https://raw.githubusercontent.com/")
+
 # Streamlit UI
 st.title("Stock Market Prediction using LSTM")
 
 # File upload section
-st.sidebar.header("Upload Files")
-filtered_indices = st.sidebar.file_uploader("Upload filtered_indices_output.csv", type="csv")
-sectors_file = st.sidebar.file_uploader("Upload sectors_with_symbols.csv", type="csv")
-
-# Parameters
+st.sidebar.header("Enter GitHub Raw URLs")
+filtered_indices_url = st.sidebar.text_input("Filtered Indices CSV URL")
+sectors_file_url = st.sidebar.text_input("Sectors CSV URL")
+daily_files_urls = st.sidebar.text_area("Daily Data CSV URLs (one per line)")
 epochs = st.sidebar.number_input("Number of Epochs", min_value=10, max_value=100, value=25)
 
-if filtered_indices and sectors_file:
+if filtered_indices_url and sectors_file_url and daily_files_urls:
     try:
-        # Load manually uploaded files
-        selected_indices = pd.read_csv(filtered_indices)
-        sectors_df = pd.read_csv(sectors_file)
+        # Validate URLs
+        if not is_valid_github_url(filtered_indices_url) or \
+           not is_valid_github_url(sectors_file_url):
+            st.error("Invalid GitHub URL. Please use raw content URLs.")
+            raise ValueError("Invalid GitHub URL")
         
-        # Fetch daily data from GitHub
+        daily_files_list = [url.strip() for url in daily_files_urls.split('\n') if url.strip()]
+        for url in daily_files_list:
+            if not is_valid_github_url(url):
+                st.error("Invalid GitHub URL in daily files. Please use raw content URLs.")
+                raise ValueError("Invalid GitHub URL")
+
+        # Load data from URLs
+        with st.status("Loading data from GitHub...", expanded=True) as status:
+            try:
+                selected_indices = pd.read_csv(filtered_indices_url)
+                sectors_df = pd.read_csv(sectors_file_url)
+                status.update(label="Successfully loaded data.", state="complete")
+            except Exception as e:
+                st.error(f"Error loading data from GitHub: {str(e)}")
+                raise
+
+        # Process daily files from URLs
         daily_data = {}
-        for index_name in selected_indices['indexname']:
-            file_name = index_name.replace('.', '_') + "_NS.csv"
-            df = load_daily_data(file_name)
-            if df is not None:
-                daily_data[index_name] = df
+        with st.status("Processing daily data files...", expanded=True) as status:
+            for file_url in daily_files_list:
+                try:
+                    file_name = file_url.split('/')[-1].split('.')[0]
+                    daily_data[file_name] = pd.read_csv(file_url)
+                    print(f"Successfully read: {file_name}")
+                except Exception as e:
+                    st.error(f"Error reading daily data from {file_url}: {str(e)}")
+                    raise
+            status.update(label="Successfully processed daily data files.", state="complete")
         
         results = []
         current_date = dt.datetime.now().strftime("%Y-%m-%d")
@@ -165,4 +172,4 @@ if filtered_indices and sectors_file:
     except Exception as e:
         st.error(f"Error processing files: {str(e)}")
 else:
-    st.info("Please upload filtered_indices_output.csv and sectors_with_symbols.csv to begin processing.")
+    st.info("Please enter all required GitHub raw content URLs to begin processing")
