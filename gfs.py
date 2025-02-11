@@ -105,9 +105,7 @@ if filtered_indices and sectors_file and daily_files:
         for _, row in selected_indices.iterrows():
             index_name = row['indexname']
             if index_name in daily_data:
-                company_name = sectors_df.loc[
-                    sectors_df['Index Name'] == index_name, 'Company Name'
-                ].iloc[0] if not sectors_df[sectors_df['Index Name'] == index_name].empty else index_name
+                company_name = sectors_df.loc[sectors_df['Index Name'] == index_name, 'Company Name'].iloc[0] if not sectors_df[sectors_df['Index Name'] == index_name].empty else index_name
                 
                 with st.expander(f"Processing {index_name} ({company_name})"):
                     train_r2, test_r2, future_preds = get_predicted_values(daily_data[index_name], epochs)
