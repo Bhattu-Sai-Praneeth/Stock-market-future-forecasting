@@ -69,10 +69,20 @@ def get_predicted_values(data, epochs=25):
     train_r2 = r2_score(y_train_actual, train_pred)
     test_r2 = r2_score(y_test_actual, test_pred)
     
+    # Get dates for plotting
+    train_dates = df['Date'].iloc[time_step + 1 : train_size]
+    test_start = train_size + time_step
+    test_end = test_start + len(y_test_actual)
+    test_dates = df['Date'].iloc[test_start : test_end]
+    
     last_sequence = scaled_data[-time_step:]
     future_preds = predict_future(model, last_sequence, scaler)
     
-    return train_r2, test_r2, future_preds
+    return (
+        train_r2, test_r2, future_preds,
+        train_dates, y_train_actual, train_pred,
+        test_dates, y_test_actual, test_pred
+    )
 
 # Streamlit UI
 st.title("Stock Market Prediction using LSTM")
@@ -108,8 +118,44 @@ if filtered_indices and sectors_file and daily_files:
                 company_name = sectors_df.loc[sectors_df['Index Name'] == index_name, 'Company Name'].iloc[0] if not sectors_df[sectors_df['Index Name'] == index_name].empty else index_name
                 
                 st.subheader(f"Processing {index_name} ({company_name})")
-                train_r2, test_r2, future_preds = get_predicted_values(daily_data[index_name], epochs)
-                    
+                (train_r2, test_r2, future_preds,
+                 train_dates, y_train_actual, train_pred,
+                 test_dates, y_test_actual, test_pred) = get_predicted_values(daily_data[index_name], epochs)
+                
+                # Create DataFrames for plotting
+                train_plot_df = pd.DataFrame({
+                    'Date': train_dates,
+                    'Actual': y_train_actual.flatten(),
+                    'Predicted': train_pred.flatten()
+                })
+                test_plot_df = pd.DataFrame({
+                    'Date': test_dates,
+                    'Actual': y_test_actual.flatten(),
+                    'Predicted': test_pred.flatten()
+                })
+                
+                # Display training and test charts
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.write(f"#### Training Data (R² = {train_r2:.4f})")
+                    st.line_chart(train_plot_df.set_index('Date'))
+                with col2:
+                    st.write(f"#### Test Data (R² = {test_r2:.4f})")
+                    st.line_chart(test_plot_df.set_index('Date'))
+                
+                # Generate future dates
+                last_date = daily_data[index_name]['Date'].iloc[-1]
+                last_date = pd.to_datetime(last_date)
+                future_dates = pd.date_range(last_date + pd.Timedelta(days=1), periods=5, freq='B')[:5]
+                
+                # Display future predictions
+                future_plot_df = pd.DataFrame({
+                    'Date': future_dates,
+                    'Predicted': future_preds
+                })
+                st.write("#### Future Predictions")
+                st.line_chart(future_plot_df.set_index('Date'))
+                
                 results.append({
                     'Run Date': current_date,
                     'Index Name': index_name,
