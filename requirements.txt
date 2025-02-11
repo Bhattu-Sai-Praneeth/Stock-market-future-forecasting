@@ -2,3 +2,4 @@ streamlit
 pandas
 pandas_ta
 tabulate
+setuptools
