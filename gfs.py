@@ -29,10 +29,19 @@ def predict_future(model, last_sequence, scaler, days=5):
         current_sequence[-1] = predicted_value
     return scaler.inverse_transform(np.array(predictions).reshape(-1, 1)).flatten()
 
-def get_predicted_values(data, epochs=25):
+def get_predicted_values(data, epochs=25, start_date=None, end_date=None):
     df = data.copy()
     df['Date'] = pd.to_datetime(df['Date'])
     df = df.sort_values('Date')
+    
+    # Filter data by selected date range if provided
+    if start_date and end_date:
+        df = df[(df['Date'] >= pd.to_datetime(start_date)) & (df['Date'] <= pd.to_datetime(end_date))]
+    
+    # Ensure there is enough data after filtering
+    if len(df) < 50:
+        st.warning("Not enough data in selected date range. Please select a wider range.")
+        return None
     
     close_data = df[['Close']]
     scaler = MinMaxScaler(feature_range=(0, 1))
@@ -56,7 +65,7 @@ def get_predicted_values(data, epochs=25):
     ])
     model.compile(loss='mean_squared_error', optimizer='adam')
     
-    # Use st.spinner to show a progress indicator during training
+    # Train model with a spinner indicator
     with st.spinner("Training model..."):
         model.fit(X_train, y_train, validation_data=(X_test, y_test), 
                   epochs=epochs, batch_size=32, verbose=1)
@@ -85,25 +94,35 @@ def get_predicted_values(data, epochs=25):
         test_dates, y_test_actual, test_pred
     )
 
-# Streamlit UI
+# ------------------ Streamlit UI ------------------
 st.title("Stock Market Prediction using LSTM")
 
-# File upload section
+# Sidebar: File Uploads
 st.sidebar.header("Upload Files")
 filtered_indices = st.sidebar.file_uploader("Upload filtered_indices_output.csv", type="csv")
 sectors_file = st.sidebar.file_uploader("Upload sectors_with_symbols.csv", type="csv")
 daily_files = st.sidebar.file_uploader("Upload Daily Data CSVs", type="csv", accept_multiple_files=True)
 
-# Parameters
+# Sidebar: Model Parameters
 epochs = st.sidebar.number_input("Number of Epochs", min_value=10, max_value=100, value=25)
 
+# Sidebar: Date Range Selector
+st.sidebar.header("Select Date Range")
+default_start = dt.date(2020, 1, 1)
+default_end = dt.date.today()
+start_date = st.sidebar.date_input("Start Date", value=default_start)
+end_date = st.sidebar.date_input("End Date", value=default_end)
+
+if start_date > end_date:
+    st.sidebar.error("Error: End date must fall after start date.")
+
+# Proceed only if all files are uploaded
 if filtered_indices and sectors_file and daily_files:
     try:
-        # Load data
+        # Load data from uploaded files
         selected_indices = pd.read_csv(filtered_indices)
         sectors_df = pd.read_csv(sectors_file)
         
-        # Process daily files
         daily_data = {}
         for file in daily_files:
             name = os.path.splitext(file.name)[0].replace('_', '.')
@@ -112,7 +131,7 @@ if filtered_indices and sectors_file and daily_files:
         results = []
         current_date = dt.datetime.now().strftime("%Y-%m-%d")
         
-        # Process each index
+        # Process each index based on the selected indices file
         for _, row in selected_indices.iterrows():
             index_name = row['indexname']
             if index_name in daily_data:
@@ -123,9 +142,13 @@ if filtered_indices and sectors_file and daily_files:
                     company_name = index_name
                 
                 st.subheader(f"Processing {index_name} ({company_name})")
+                result = get_predicted_values(daily_data[index_name], epochs, start_date, end_date)
+                if result is None:
+                    continue  # Skip if not enough data
+                
                 (train_r2, test_r2, future_preds,
                  train_dates, y_train_actual, train_pred,
-                 test_dates, y_test_actual, test_pred) = get_predicted_values(daily_data[index_name], epochs)
+                 test_dates, y_test_actual, test_pred) = result
                 
                 # Create DataFrames for plotting (ensure Date is datetime)
                 train_plot_df = pd.DataFrame({
@@ -139,7 +162,7 @@ if filtered_indices and sectors_file and daily_files:
                     'Predicted': test_pred.flatten()
                 })
                 
-                # Display training and test charts
+                # Display training and test charts side-by-side
                 col1, col2 = st.columns(2)
                 with col1:
                     st.write(f"#### Training Data (R² = {train_r2:.4f})")
@@ -149,10 +172,10 @@ if filtered_indices and sectors_file and daily_files:
                     st.line_chart(test_plot_df.set_index('Date'))
                 
                 # Generate future dates based on the last date in the dataset
-                last_date = pd.to_datetime(daily_data[index_name]['Date'].iloc[-1])
-                future_dates = pd.date_range(last_date + pd.Timedelta(days=1), periods=5, freq='B')[:5]
+                last_date_in_data = pd.to_datetime(daily_data[index_name]['Date']).max()
+                future_dates = pd.date_range(last_date_in_data + pd.Timedelta(days=1), periods=5, freq='B')[:5]
                 
-                # Display future predictions
+                # Display future predictions chart
                 future_plot_df = pd.DataFrame({
                     'Date': future_dates,
                     'Predicted': future_preds
@@ -174,7 +197,7 @@ if filtered_indices and sectors_file and daily_files:
                     'Day 5': future_preds[4]
                 })
         
-        # Display results table
+        # Display the summary results table
         if results:
             result_df = pd.DataFrame(results)
             st.subheader("Prediction Results")
@@ -188,7 +211,7 @@ if filtered_indices and sectors_file and daily_files:
                 'Day 5': '{:.2f}'
             }))
         else:
-            st.warning("No valid data found for processing")
+            st.warning("No valid data found for processing.")
             
     except Exception as e:
         st.error(f"Error processing files: {str(e)}")
