@@ -55,10 +55,9 @@ def get_predicted_values(data, epochs=25):
     ])
     model.compile(loss='mean_squared_error', optimizer='adam')
     
-    with st.status("Training model...", expanded=True) as status:
+    with st.spinner("Training model..."):
         model.fit(X_train, y_train, validation_data=(X_test, y_test), 
-                epochs=epochs, batch_size=32, verbose=1)
-        status.update(label="Training complete", state="complete")
+                  epochs=epochs, batch_size=32, verbose=1)
     
     train_pred = scaler.inverse_transform(model.predict(X_train))
     test_pred = scaler.inverse_transform(model.predict(X_test))
@@ -77,31 +76,41 @@ def get_predicted_values(data, epochs=25):
 # Streamlit UI
 st.title("Stock Market Prediction using LSTM")
 
-# File upload section
+# File upload section for the two required files
 st.sidebar.header("Upload Files")
 filtered_indices = st.sidebar.file_uploader("Upload filtered_indices_output.csv", type="csv")
 sectors_file = st.sidebar.file_uploader("Upload sectors_with_symbols.csv", type="csv")
-daily_files = st.sidebar.file_uploader("Upload Daily Data CSVs", type="csv", accept_multiple_files=True)
 
-# Parameters
+# Inform the user that daily data files are loaded automatically from the GitHub directory.
+st.sidebar.info("Daily data files will be loaded automatically from the 'DATASETS/Daily_data/' directory.")
+
+# Parameter for model training
 epochs = st.sidebar.number_input("Number of Epochs", min_value=10, max_value=100, value=25)
 
-if filtered_indices and sectors_file and daily_files:
+if filtered_indices and sectors_file:
     try:
-        # Load data
+        # Load the uploaded files
         selected_indices = pd.read_csv(filtered_indices)
         sectors_df = pd.read_csv(sectors_file)
         
-        # Process daily files
+        # Load daily data files from the local directory
         daily_data = {}
-        for file in daily_files:
-            name = os.path.splitext(file.name)[0].replace('_', '.')
-            daily_data[name] = pd.read_csv(file)
+        daily_data_folder = "DATASETS/Daily_data/"
+        if os.path.exists(daily_data_folder):
+            for file_name in os.listdir(daily_data_folder):
+                if file_name.endswith('.csv'):
+                    file_path = os.path.join(daily_data_folder, file_name)
+                    # Convert filename to match the index name format (e.g., replacing underscores with dots)
+                    name = os.path.splitext(file_name)[0].replace('_', '.')
+                    daily_data[name] = pd.read_csv(file_path)
+        else:
+            st.error(f"Daily data folder '{daily_data_folder}' not found.")
+            st.stop()
         
         results = []
         current_date = dt.datetime.now().strftime("%Y-%m-%d")
         
-        # Process each index
+        # Process each index listed in the filtered_indices file
         for _, row in selected_indices.iterrows():
             index_name = row['indexname']
             if index_name in daily_data:
@@ -126,7 +135,7 @@ if filtered_indices and sectors_file and daily_files:
                         'Day 5': future_preds[4]
                     })
         
-        # Display results
+        # Display the prediction results if available
         if results:
             result_df = pd.DataFrame(results)
             st.subheader("Prediction Results")
@@ -145,4 +154,4 @@ if filtered_indices and sectors_file and daily_files:
     except Exception as e:
         st.error(f"Error processing files: {str(e)}")
 else:
-    st.info("Please upload all required files to begin processing")
+    st.info("Please upload the required files to begin processing")
