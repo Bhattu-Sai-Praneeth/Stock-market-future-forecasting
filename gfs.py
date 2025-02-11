@@ -104,7 +104,7 @@ sectors_file = st.sidebar.file_uploader("Upload sectors_with_symbols.csv", type=
 daily_files = st.sidebar.file_uploader("Upload Daily Data CSVs", type="csv", accept_multiple_files=True)
 
 # Sidebar: Model Parameters
-epochs = st.sidebar.number_input("Number of Epochs", min_value=10, max_value=100, value=25)
+epochs = st.sidebar.number_input("Number of Epochs", min_value=10, max_value=150, value=25)
 
 # Sidebar: Date Range Selector
 st.sidebar.header("Select Date Range")
