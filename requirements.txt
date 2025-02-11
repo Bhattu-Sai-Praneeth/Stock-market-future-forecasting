@@ -1,6 +1,6 @@
 streamlit
 pandas
-pandas_ta
+pandas_ta>=0.3.1
 tabulate
 numpy
 setuptools
