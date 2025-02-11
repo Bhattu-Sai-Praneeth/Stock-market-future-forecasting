@@ -78,7 +78,14 @@ def get_predicted_values(data, epochs=25):
 def fetch_csv_from_github(url):
     response = requests.get(url)
     if response.status_code == 200:
-        return pd.read_csv(StringIO(response.text))
+        try:
+            # Attempt to read CSV while skipping problematic lines
+            data = pd.read_csv(StringIO(response.text), error_bad_lines=False)
+            st.write(data.head())  # Log the first few rows to inspect the data
+            return data
+        except pd.errors.ParserError as e:
+            st.error(f"Error parsing CSV: {str(e)}")
+            return None
     else:
         st.error(f"Failed to fetch data from {url}")
         return None
@@ -120,9 +127,7 @@ if filtered_indices and sectors_file:
         for _, row in selected_indices.iterrows():
             index_name = row['indexname']
             if index_name in daily_data:
-                company_name = sectors_df.loc[
-                    sectors_df['Index Name'] == index_name, 'Company Name'
-                ].iloc[0] if not sectors_df[sectors_df['Index Name'] == index_name].empty else index_name
+                company_name = sectors_df.loc[sectors_df['Index Name'] == index_name, 'Company Name'].iloc[0] if not sectors_df[sectors_df['Index Name'] == index_name].empty else index_name
                 
                 with st.expander(f"Processing {index_name} ({company_name})"):
                     train_r2, test_r2, future_preds = get_predicted_values(daily_data[index_name], epochs)
