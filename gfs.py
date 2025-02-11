@@ -1,6 +1,6 @@
 import streamlit as st
 import pandas as pd
-import numpy as np
+import numpy as NaN
 import datetime as dt
 from pathlib import Path
 import pandas_ta as ta
