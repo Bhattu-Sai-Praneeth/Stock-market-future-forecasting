@@ -3,4 +3,5 @@ pandas
 pandas_ta
 tabulate
 numpy
+NaN
 setuptools
