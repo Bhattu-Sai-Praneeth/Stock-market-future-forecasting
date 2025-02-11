@@ -23,9 +23,10 @@ def predict_future(model, last_sequence, scaler, days=5):
     current_sequence = last_sequence.copy()
     for _ in range(days):
         next_pred = model.predict(current_sequence.reshape(1, -1, 1))
-        predictions.append(next_pred[0, 0])
+        predicted_value = next_pred[0, 0]
+        predictions.append(predicted_value)
         current_sequence = np.roll(current_sequence, -1)
-        current_sequence[-1] = next_pred
+        current_sequence[-1] = predicted_value
     return scaler.inverse_transform(np.array(predictions).reshape(-1, 1)).flatten()
 
 def get_predicted_values(data, epochs=25):
@@ -55,10 +56,10 @@ def get_predicted_values(data, epochs=25):
     ])
     model.compile(loss='mean_squared_error', optimizer='adam')
     
-    with st.status("Training model...", expanded=True) as status:
+    # Use st.spinner to show a progress indicator during training
+    with st.spinner("Training model..."):
         model.fit(X_train, y_train, validation_data=(X_test, y_test), 
-                epochs=epochs, batch_size=32, verbose=1)
-        status.update(label="Training complete", state="complete")
+                  epochs=epochs, batch_size=32, verbose=1)
     
     train_pred = scaler.inverse_transform(model.predict(X_train))
     test_pred = scaler.inverse_transform(model.predict(X_test))
@@ -115,21 +116,25 @@ if filtered_indices and sectors_file and daily_files:
         for _, row in selected_indices.iterrows():
             index_name = row['indexname']
             if index_name in daily_data:
-                company_name = sectors_df.loc[sectors_df['Index Name'] == index_name, 'Company Name'].iloc[0] if not sectors_df[sectors_df['Index Name'] == index_name].empty else index_name
+                # Get company name from sectors file if available
+                if not sectors_df[sectors_df['Index Name'] == index_name].empty:
+                    company_name = sectors_df.loc[sectors_df['Index Name'] == index_name, 'Company Name'].iloc[0]
+                else:
+                    company_name = index_name
                 
                 st.subheader(f"Processing {index_name} ({company_name})")
                 (train_r2, test_r2, future_preds,
                  train_dates, y_train_actual, train_pred,
                  test_dates, y_test_actual, test_pred) = get_predicted_values(daily_data[index_name], epochs)
                 
-                # Create DataFrames for plotting
+                # Create DataFrames for plotting (ensure Date is datetime)
                 train_plot_df = pd.DataFrame({
-                    'Date': train_dates,
+                    'Date': pd.to_datetime(train_dates),
                     'Actual': y_train_actual.flatten(),
                     'Predicted': train_pred.flatten()
                 })
                 test_plot_df = pd.DataFrame({
-                    'Date': test_dates,
+                    'Date': pd.to_datetime(test_dates),
                     'Actual': y_test_actual.flatten(),
                     'Predicted': test_pred.flatten()
                 })
@@ -143,9 +148,8 @@ if filtered_indices and sectors_file and daily_files:
                     st.write(f"#### Test Data (R² = {test_r2:.4f})")
                     st.line_chart(test_plot_df.set_index('Date'))
                 
-                # Generate future dates
-                last_date = daily_data[index_name]['Date'].iloc[-1]
-                last_date = pd.to_datetime(last_date)
+                # Generate future dates based on the last date in the dataset
+                last_date = pd.to_datetime(daily_data[index_name]['Date'].iloc[-1])
                 future_dates = pd.date_range(last_date + pd.Timedelta(days=1), periods=5, freq='B')[:5]
                 
                 # Display future predictions
@@ -170,7 +174,7 @@ if filtered_indices and sectors_file and daily_files:
                     'Day 5': future_preds[4]
                 })
         
-        # Display results
+        # Display results table
         if results:
             result_df = pd.DataFrame(results)
             st.subheader("Prediction Results")
