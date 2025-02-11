@@ -1,101 +1,148 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
+from sklearn.metrics import r2_score
+from sklearn.preprocessing import MinMaxScaler
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import Dense, LSTM
 import datetime as dt
-from pathlib import Path
-import pandas_ta as ta
-from tabulate import tabulate
+import os
 
-# --- Functions ---
-def append_row(df, row):
-    return pd.concat([df, pd.DataFrame([row], columns=row.index)]).reset_index(drop=True)
+st.set_page_config(page_title="Stock Prediction", layout="wide")
 
-def getRSI14(csvfilename):
-    if not Path(csvfilename).is_file():
-        print(f"File does not exist: {csvfilename}")
-        return 0.00, 0.00
+def create_dataset(dataset, time_step=1):
+    dataX, dataY = [], []
+    for i in range(len(dataset) - time_step - 1):
+        a = dataset[i:(i + time_step), 0]
+        dataX.append(a)
+        dataY.append(dataset[i + time_step, 0])
+    return np.array(dataX), np.array(dataY)
 
+def predict_future(model, last_sequence, scaler, days=5):
+    predictions = []
+    current_sequence = last_sequence.copy()
+    for _ in range(days):
+        next_pred = model.predict(current_sequence.reshape(1, -1, 1))
+        predictions.append(next_pred[0, 0])
+        current_sequence = np.roll(current_sequence, -1)
+        current_sequence[-1] = next_pred
+    return scaler.inverse_transform(np.array(predictions).reshape(-1, 1)).flatten()
+
+def get_predicted_values(data, epochs=25):
+    df = data.copy()
+    df['Date'] = pd.to_datetime(df['Date'])
+    df = df.sort_values('Date')
+    
+    close_data = df[['Close']]
+    scaler = MinMaxScaler(feature_range=(0, 1))
+    scaled_data = scaler.fit_transform(close_data)
+    
+    time_step = 13
+    train_size = int(len(scaled_data) * 0.8)
+    train_data, test_data = scaled_data[:train_size], scaled_data[train_size:]
+    
+    X_train, y_train = create_dataset(train_data, time_step)
+    X_test, y_test = create_dataset(test_data, time_step)
+    
+    X_train = X_train.reshape(X_train.shape[0], X_train.shape[1], 1)
+    X_test = X_test.reshape(X_test.shape[0], X_test.shape[1], 1)
+    
+    model = Sequential([
+        LSTM(32, return_sequences=True, input_shape=(time_step, 1)),
+        LSTM(32, return_sequences=True),
+        LSTM(32),
+        Dense(1)
+    ])
+    model.compile(loss='mean_squared_error', optimizer='adam')
+    
+    with st.status("Training model...", expanded=True) as status:
+        model.fit(X_train, y_train, validation_data=(X_test, y_test), 
+                epochs=epochs, batch_size=32, verbose=1)
+        status.update(label="Training complete", state="complete")
+    
+    train_pred = scaler.inverse_transform(model.predict(X_train))
+    test_pred = scaler.inverse_transform(model.predict(X_test))
+    
+    y_train_actual = scaler.inverse_transform(y_train.reshape(-1, 1))
+    y_test_actual = scaler.inverse_transform(y_test.reshape(-1, 1))
+    
+    train_r2 = r2_score(y_train_actual, train_pred)
+    test_r2 = r2_score(y_test_actual, test_pred)
+    
+    last_sequence = scaled_data[-time_step:]
+    future_preds = predict_future(model, last_sequence, scaler)
+    
+    return train_r2, test_r2, future_preds
+
+# Streamlit UI
+st.title("Stock Market Prediction using LSTM")
+
+# File upload section
+st.sidebar.header("Upload Files")
+filtered_indices = st.sidebar.file_uploader("Upload filtered_indices_output.csv", type="csv")
+sectors_file = st.sidebar.file_uploader("Upload sectors_with_symbols.csv", type="csv")
+daily_files = st.sidebar.file_uploader("Upload Daily Data CSVs", type="csv", accept_multiple_files=True)
+
+# Parameters
+epochs = st.sidebar.number_input("Number of Epochs", min_value=10, max_value=100, value=25)
+
+if filtered_indices and sectors_file and daily_files:
     try:
-        df = pd.read_csv(csvfilename)
-        if df.empty:
-            return 0.00, 0.00
-
-        df['Close'] = pd.to_numeric(df['Close'], errors='coerce')
-        df['rsi14'] = ta.rsi(df['Close'], length=14)
-
-        if pd.isna(df['rsi14'].iloc[-1]) or np.isnan(df['rsi14'].iloc[-1]):
-            return 0.00, 0.00
-
-        rsival = df['rsi14'].iloc[-1].round(2)
-        ltp = df['Close'].iloc[-1].round(2)
-        return rsival, ltp
-
-    except Exception as e:
-        print(f"Error reading {csvfilename}: {e}")
-        return 0.00, 0.00
-
-
-def dayweekmonth_datasets(symbol, symbolname):
-    symbol = symbol.replace(".NS", "_NS") if symbol.endswith('.NS') else symbol  # Simplified
-
-    base_path = Path("DATASETS")
-    daylocationstr = base_path / "Daily_data" / f"{symbol}.csv"
-    weeklocationstr = base_path / "Weekly_data" / f"{symbol}.csv"
-    monthlocationstr = base_path / "Monthly_data" / f"{symbol}.csv"
-
-    cday = dt.datetime.today().strftime('%d/%m/%Y')
-    dayrsi14, _ = getRSI14(daylocationstr)  # Use _ for unused variables
-    weekrsi14, _ = getRSI14(weeklocationstr)
-    monthrsi14, _ = getRSI14(monthlocationstr)
-
-    return pd.Series({
-        'entrydate': cday,
-        'indexcode': symbol,
-        'indexname': symbolname.strip(),
-        'dayrsi14': dayrsi14,
-        'weekrsi14': weekrsi14,
-        'monthrsi14': monthrsi14
-    })
-
-
-def generateGFS(scripttype):
-    indicesdf = pd.DataFrame(columns=['entrydate', 'indexcode', 'indexname', 'dayrsi14', 'weekrsi14', 'monthrsi14'])
-    base_path = Path("DATASETS")
-    fname = base_path / scripttype
-
-    try:
-        with open(fname) as f:
-            for line in f:
-                if "," not in line:
-                    continue
-                symbol, symbolname = line.strip().split(",")  # Combined strip and split
-                new_row = dayweekmonth_datasets(symbol, symbolname)
-                indicesdf = append_row(indicesdf, new_row)
-    except Exception as e:
-        st.error(f"Error processing {fname}: {e}")
-        return None
-
-    return indicesdf
-
-
-# --- Streamlit App ---
-st.title("GFS Report Generator")
-
-script_type = "indicesdf.csv"
-
-if st.button("Generate GFS Report"):
-    with st.spinner("Generating report..."):
-        df = generateGFS(script_type)
-
-        if df is not None:
-            st.dataframe(df)
-            st.write(tabulate(df, headers='keys', tablefmt='fancy_grid'))
-
-            st.download_button(
-                label="Download CSV",
-                data=df.to_csv(index=False).encode('utf-8'),
-                file_name=f"GFS_{script_type}.csv",
-                mime="text/csv",
-            )
+        # Load data
+        selected_indices = pd.read_csv(filtered_indices)
+        sectors_df = pd.read_csv(sectors_file)
+        
+        # Process daily files
+        daily_data = {}
+        for file in daily_files:
+            name = os.path.splitext(file.name)[0].replace('_', '.')
+            daily_data[name] = pd.read_csv(file)
+        
+        results = []
+        current_date = dt.datetime.now().strftime("%Y-%m-%d")
+        
+        # Process each index
+        for _, row in selected_indices.iterrows():
+            index_name = row['indexname']
+            if index_name in daily_data:
+                company_name = sectors_df.loc[
+                    sectors_df['Index Name'] == index_name, 'Company Name'
+                ].iloc[0] if not sectors_df[sectors_df['Index Name'] == index_name].empty else index_name
+                
+                with st.expander(f"Processing {index_name} ({company_name})"):
+                    train_r2, test_r2, future_preds = get_predicted_values(daily_data[index_name], epochs)
+                    
+                    results.append({
+                        'Run Date': current_date,
+                        'Index Name': index_name,
+                        'Company Name': company_name,
+                        'Model': 'LSTM',
+                        'Train R2 Score': train_r2,
+                        'Test R2 Score': test_r2,
+                        'Day 1': future_preds[0],
+                        'Day 2': future_preds[1],
+                        'Day 3': future_preds[2],
+                        'Day 4': future_preds[3],
+                        'Day 5': future_preds[4]
+                    })
+        
+        # Display results
+        if results:
+            result_df = pd.DataFrame(results)
+            st.subheader("Prediction Results")
+            st.dataframe(result_df.style.format({
+                'Train R2 Score': '{:.4f}',
+                'Test R2 Score': '{:.4f}',
+                'Day 1': '{:.2f}',
+                'Day 2': '{:.2f}',
+                'Day 3': '{:.2f}',
+                'Day 4': '{:.2f}',
+                'Day 5': '{:.2f}'
+            }))
         else:
-            st.write("Report generation failed. Check error messages.")
+            st.warning("No valid data found for processing")
+            
+    except Exception as e:
+        st.error(f"Error processing files: {str(e)}")
+else:
+    st.info("Please upload all required files to begin processing")
