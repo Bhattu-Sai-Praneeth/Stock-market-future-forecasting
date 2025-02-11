@@ -79,8 +79,8 @@ def fetch_csv_from_github(url):
     response = requests.get(url)
     if response.status_code == 200:
         try:
-            # Attempt to read CSV while skipping problematic lines
-            data = pd.read_csv(StringIO(response.text), error_bad_lines=False)
+            # Use 'on_bad_lines' to skip problematic rows
+            data = pd.read_csv(StringIO(response.text), on_bad_lines='skip')
             st.write(data.head())  # Log the first few rows to inspect the data
             return data
         except pd.errors.ParserError as e:
