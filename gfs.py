@@ -31,6 +31,7 @@ def predict_future(model, last_sequence, scaler, days=5):
 
 def get_predicted_values(data, epochs=25, start_date=None, end_date=None):
     df = data.copy()
+    # Date is already parsed if using parse_dates on import; re-ensure type:
     df['Date'] = pd.to_datetime(df['Date'])
     df = df.sort_values('Date')
     
@@ -43,6 +44,7 @@ def get_predicted_values(data, epochs=25, start_date=None, end_date=None):
         st.warning("Not enough data in selected date range. Please select a wider range.")
         return None
     
+    # Use the 'Close' column for prediction (change to 'Adj Close' if needed)
     close_data = df[['Close']]
     scaler = MinMaxScaler(feature_range=(0, 1))
     scaled_data = scaler.fit_transform(close_data)
@@ -101,7 +103,12 @@ st.title("Stock Market Prediction using LSTM")
 st.sidebar.header("Upload Files")
 filtered_indices = st.sidebar.file_uploader("Upload filtered_indices_output.csv", type="csv")
 sectors_file = st.sidebar.file_uploader("Upload sectors_with_symbols.csv", type="csv")
-daily_files = st.sidebar.file_uploader("Upload Daily Data CSVs", type="csv", accept_multiple_files=True)
+# Import daily CSV files with the selected columns
+daily_files = st.sidebar.file_uploader(
+    "Upload Daily Data CSVs",
+    type="csv",
+    accept_multiple_files=True
+)
 
 # Sidebar: Model Parameters
 epochs = st.sidebar.number_input("Number of Epochs", min_value=10, max_value=100, value=25)
@@ -123,10 +130,16 @@ if filtered_indices and sectors_file and daily_files:
         selected_indices = pd.read_csv(filtered_indices)
         sectors_df = pd.read_csv(sectors_file)
         
+        # Read daily files using only the required columns.
         daily_data = {}
         for file in daily_files:
             name = os.path.splitext(file.name)[0].replace('_', '.')
-            daily_data[name] = pd.read_csv(file)
+            # Directly import only the needed columns and parse the Date column
+            daily_data[name] = pd.read_csv(
+                file, 
+                parse_dates=['Date'], 
+                usecols=['Date', 'Adj Close', 'Close', 'High', 'Low', 'Open', 'Volume']
+            )
         
         results = []
         current_date = dt.datetime.now().strftime("%Y-%m-%d")
