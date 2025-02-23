@@ -1,7 +1,8 @@
 streamlit
+yfinance
 pandas
 numpy
+pandas_ta
 scikit-learn
 tensorflow
-requests
-altair
+pathlib
