@@ -1,3 +1,17 @@
+import os
+import streamlit as st
+
+# --- Fix pandas-ta issue before importing ---
+file_path = "/home/adminuser/venv/lib/python3.10/site-packages/pandas_ta/momentum/squeeze_pro.py"
+
+if os.path.exists(file_path):
+    with open(file_path, "r") as file:
+        content = file.read()
+    # Fix the NaN import issue
+    if "from numpy import NaN as npNaN" in content:
+        content = content.replace("from numpy import NaN as npNaN", "import numpy as np\nnpNaN = np.nan")
+        with open(file_path, "w") as file:
+            file.write(content)
 import streamlit as st
 import yfinance as yf
 import pandas as pd
