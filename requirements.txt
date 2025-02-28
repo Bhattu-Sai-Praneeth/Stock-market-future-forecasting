@@ -1,3 +1,4 @@
+python==3.10
 streamlit
 pandas>=1.3
 numpy>=1.21
@@ -6,7 +7,7 @@ beautifulsoup4
 nltk
 transformers
 torch
-pandas-ta
+pandas-ta==0.3.14b
 scikit-learn
 tensorflow>=2.9
 yfinance
