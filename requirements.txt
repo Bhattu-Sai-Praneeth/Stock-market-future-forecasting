@@ -1,8 +1,13 @@
 streamlit
-yfinance
 pandas
 numpy
-pandas_ta
+requests
+beautifulsoup4
+nltk
+transformers
+torch
+pandas-ta
 scikit-learn
 tensorflow
-pathlib
+yfinance
+plotly
