@@ -1,6 +1,6 @@
 streamlit
-pandas
-numpy
+pandas>=1.3
+numpy>=1.21
 requests
 beautifulsoup4
 nltk
@@ -8,6 +8,6 @@ transformers
 torch
 pandas-ta
 scikit-learn
-tensorflow
+tensorflow>=2.9
 yfinance
 plotly
