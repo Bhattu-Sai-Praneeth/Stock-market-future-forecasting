@@ -10,6 +10,7 @@ from sklearn.metrics import r2_score
 from sklearn.preprocessing import MinMaxScaler
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import Dense, LSTM
+import plotly.graph_objects as go
 
 # -----------------------------
 # Additional Imports for News & Sentiment Analysis
@@ -28,14 +29,15 @@ from urllib3.util.retry import Retry
 nltk.download('vader_lexicon')
 
 # -----------------------------
-# Configuration & Paths
+# Streamlit Configuration
 # -----------------------------
-# st.set_page_config(page_title="Stock Analysis & Prediction Dashboard", layout="wide")
 st.set_page_config(
     page_title="Stock Analysis & Prediction",
-    page_icon=r"C:\Users\saipr\OneDrive\Desktop\MAIN UPDATED PROJECT\favicon.ico",
+    page_icon="favicon.ico",
     layout="wide"
 )
+
+# Hide Streamlit Default UI Elements
 hide_streamlit_style = """
     <style>
         #MainMenu {visibility: hidden;}
@@ -45,7 +47,9 @@ hide_streamlit_style = """
 """
 st.markdown(hide_streamlit_style, unsafe_allow_html=True)
 
-# Set up directories (adjust BASE_DIR as needed)
+# -----------------------------
+# File Paths & Directories
+# -----------------------------
 BASE_DIR = r"C:\Users\saipr\OneDrive\Desktop\MAIN UPDATED PROJECT\DATASETS"
 DAILY_DIR = os.path.join(BASE_DIR, "Daily_data")
 WEEKLY_DIR = os.path.join(BASE_DIR, "Weekly_data")
@@ -67,11 +71,12 @@ def clean_and_save_data(data, filepath):
     data = data.dropna()
     data.to_csv(filepath, index=False)
 
-def download_stock_data(interval, folder):
+def download_stock_data(interval, folder, custom_start_date="2020-01-01", custom_end_date=None):
     base_path = BASE_DIR
     filepath = os.path.join(base_path, "indicesstocks.csv")
-    start_date = "2020-01-01"
-    end_date = get_latest_date()
+    # Use the fixed start date (2020-01-01) and provided custom end date, if any; otherwise, use the current date.
+    start_date = custom_start_date
+    end_date = custom_end_date if custom_end_date else get_latest_date()
 
     # Count total symbols
     total_symbols = 0
@@ -119,7 +124,7 @@ def download_stock_data(interval, folder):
     st.success(f"{folder.replace('_', ' ').title()} download & update completed!")
 
 def fetch_vix():
-    vix = yf.Ticker("^INDIAVIX")
+    vix = yf.Ticker("^VIX")
     vix_data = vix.history(period="1d")
     return vix_data['Close'].iloc[0] if not vix_data.empty else None
 
@@ -327,7 +332,7 @@ def load_finbert():
     return pipeline("text-classification", model="ProsusAI/finbert")
 
 def scrape_moneycontrol_news(company):
-    search_url = f"https://www.moneycontrol.com/news/tags/{company.replace(' ', '-').lower()}.html"
+    search_url = f"https://www.moneycontrol.com/news/tags/{str(company).replace(' ', '-').lower()}.html"
     headers = {"User-Agent": random.choice(USER_AGENTS)}
     try:
         response = session_news.get(search_url, headers=headers, timeout=10)
@@ -369,6 +374,37 @@ def scrape_bing_news(company):
     except Exception:
         return []
 
+def fetch_news_newsapi(company):
+    import requests.utils
+    news_api_key = "063b1b2696c24c3a867c46c94cf9b810"
+    keywords = (
+        '"stocks" OR "market" OR "earnings" OR "finance" OR "shares" OR '
+        '"dividends" OR "profit" OR "investment" OR "revenue" OR "IPO" OR '
+        '"acquisition" OR "merger" OR "valuation" OR "forecast" OR "guidance" OR '
+        '"liquidity" OR "debt" OR "equity" OR "yield" OR "expense" OR '
+        '"gain" OR "growth" OR "upturn" OR "surge" OR "positive" OR "favorable" OR '
+        '"improvement" OR "expansion" OR "strong" OR '
+        '"loss" OR "decline" OR "drop" OR "bearish" OR "downturn" OR "negative" OR '
+        '"weak" OR "recession" OR "crisis" OR "slump"'
+    )
+    query = f'"{company}" AND ({keywords})'
+    encoded_query = requests.utils.quote(query)
+    search_url = f"https://newsapi.org/v2/everything?qInTitle={encoded_query}&apiKey={news_api_key}"
+    try:
+        response = session_news.get(search_url, timeout=10)
+        response.raise_for_status()
+        data = response.json()
+        articles = data.get("articles", [])
+        news = []
+        for article in articles[:5]:
+            headline = article.get("title", "")
+            link = article.get("url", "")
+            if headline and link:
+                news.append((headline, link))
+        return news
+    except Exception:
+        return []
+
 def fetch_news(company):
     news = scrape_moneycontrol_news(company)
     if not news:
@@ -394,15 +430,18 @@ def analyze_sentiment(text, method):
                 return "Neutral"
         elif method == "FinBERT":
             finbert = load_finbert()
-            result = finbert(text[:512], truncation=True)[0]  # handle text length
-            return result['label'].capitalize()  # "positive", "negative", "neutral" => "Positive", etc.
+            result = finbert(text[:512], truncation=True)[0]
+            return result['label'].capitalize()
     except Exception:
         return "Error"
 
-def update_filtered_indices_by_sentiment(filepath, sentiment_method="VADER"):
+def update_filtered_indices_by_sentiment(filepath, sentiment_method="VADER", use_newsapi=False, aggregate_sources=False):
     """
     Reads the CSV file, fetches news for each company, analyzes sentiment,
     and removes companies with overall 'Negative' sentiment from the CSV.
+    If use_newsapi is True, it will fetch news using NewsAPI.org.
+    If aggregate_sources is True, it combines headlines from both NewsAPI.org and default sources.
+    Additionally, it now counts the number of Positive, Negative, and Neutral headlines.
     """
     df = pd.read_csv(filepath)
     companies = df["Company Name"].unique()
@@ -413,14 +452,30 @@ def update_filtered_indices_by_sentiment(filepath, sentiment_method="VADER"):
     progress_bar = st.progress(0)
     for idx, company in enumerate(companies):
         progress_bar.progress((idx + 1) / len(companies))
-        news = fetch_news(company)
+        if aggregate_sources:
+            news_api_news = fetch_news_newsapi(company)
+            default_news = fetch_news(company)
+            # Combine and deduplicate news based on (headline, link)
+            combined_news = news_api_news + default_news
+            unique_news = []
+            seen = set()
+            for headline, link in combined_news:
+                key = (headline, link)
+                if key not in seen:
+                    unique_news.append((headline, link))
+                    seen.add(key)
+            news = unique_news
+        elif use_newsapi:
+            news = fetch_news_newsapi(company)
+        else:
+            news = fetch_news(company)
+            
         company_news_details = []
-
+        pos = neg = neu = 0  # Initialize sentiment counts
+        
         if not news:
-            # If no news, treat it as neutral
             verdict = "Neutral"
         else:
-            pos = neg = neu = 0
             for headline, link in news:
                 sentiment = analyze_sentiment(headline, sentiment_method)
                 company_news_details.append((headline, sentiment, link))
@@ -432,7 +487,6 @@ def update_filtered_indices_by_sentiment(filepath, sentiment_method="VADER"):
                     neu += 1
             total = pos + neg + neu
             if total > 0:
-                # Decide overall verdict
                 if (pos / total) > 0.4:
                     verdict = "Positive"
                 elif (neg / total) > 0.4:
@@ -442,16 +496,14 @@ def update_filtered_indices_by_sentiment(filepath, sentiment_method="VADER"):
             else:
                 verdict = "Neutral"
 
-        sentiment_summary[company] = verdict
+        # Store the verdict and sentiment counts for the company
+        sentiment_summary[company] = {"Verdict": verdict, "Positive": pos, "Negative": neg, "Neutral": neu}
         news_data[company] = company_news_details
 
-        # Keep only non-negative
         if verdict != "Negative":
             updated_companies.append(company)
 
     progress_bar.empty()
-
-    # Filter out negative-sentiment companies
     updated_df = df[df["Company Name"].isin(updated_companies)]
     updated_df.to_csv(filepath, index=False)
 
@@ -478,7 +530,7 @@ st.sidebar.markdown(
 
 tab1, tab2 = st.tabs(["GFS Analysis & News Sentiment Analysis", "Stock Prediction (LSTM)"])
 
-# ----------- Tab 1: GFS Analysis & News Sentiment -----------
+# ----------- Tab 1: GFS Analysis & News Sentiment Analysis -----------
 with tab1:
     st.header("GFS Analysis")
     st.markdown(
@@ -520,76 +572,88 @@ with tab1:
 
         if 'data_choice' in st.session_state:
             if st.session_state.data_choice == 'update':
-                with st.spinner("Downloading and updating data..."):
-                    os.makedirs(DAILY_DIR, exist_ok=True)
-                    os.makedirs(WEEKLY_DIR, exist_ok=True)
-                    os.makedirs(MONTHLY_DIR, exist_ok=True)
-                    download_stock_data(interval='1d', folder='Daily_data')
-                    download_stock_data(interval='1wk', folder='Weekly_data')
-                    download_stock_data(interval='1mo', folder='Monthly_data')
-                
-                def generate_gfs_reports():
-                    df3 = generateGFS('indicesdf')
-                    df4 = df3.loc[
-                        df3['monthrsi14'].between(40, 60) &
-                        df3['weekrsi14'].between(40, 60) &
-                        df3['dayrsi14'].between(40, 60)
-                    ]
+                # Provide a dropdown to choose between using the current date or a custom end date.
+                update_option = st.selectbox("Select dataset update option", options=["Use Current Date", "Select Custom End Date"])
+                # Fixed start date is always 2020-01-01.
+                fixed_start_date = "2020-01-01"
+                if update_option == "Select Custom End Date":
+                    custom_end_date = st.date_input("Select Custom End Date", value=dt.date.today(), max_value=dt.date.today())
+                    selected_end_date_str = custom_end_date.strftime("%Y-%m-%d")
+                else:
+                    selected_end_date_str = None  # This will force the download function to use the current date as end date.
                     
-                    st.markdown("### Qualified Indices")
-                    if df4.empty:
-                        st.warning("No indices meet GFS criteria.")
-                    else:
-                        st.dataframe(df4.style.format({
-                            'dayrsi14': '{:.2f}',
-                            'weekrsi14': '{:.2f}',
-                            'monthrsi14': '{:.2f}',
-                            'dltp': '{:.2f}'
-                        }), use_container_width=True)
-                        df4.to_csv(os.path.join(BASE_DIR, "filtered_indices.csv"), index=False)
+                # Only proceed with download once the "Proceed" button is pressed.
+                if st.button("Proceed to Download and Update Data"):
+                    with st.spinner("Downloading and updating data..."):
+                        os.makedirs(DAILY_DIR, exist_ok=True)
+                        os.makedirs(WEEKLY_DIR, exist_ok=True)
+                        os.makedirs(MONTHLY_DIR, exist_ok=True)
+                        download_stock_data(interval='1d', folder='Daily_data', custom_start_date=fixed_start_date, custom_end_date=selected_end_date_str)
+                        download_stock_data(interval='1wk', folder='Weekly_data', custom_start_date=fixed_start_date, custom_end_date=selected_end_date_str)
+                        download_stock_data(interval='1mo', folder='Monthly_data', custom_start_date=fixed_start_date, custom_end_date=selected_end_date_str)
                     
-                    st.markdown("### Qualified Stocks")
-                    indices_dict = read_indicesstocks(os.path.join(BASE_DIR, "indicesstocks.csv"))
-                    results_df = pd.DataFrame(columns=df3.columns)
-                    for index in df4['indexcode']:
-                        if index in indices_dict:
-                            for stock in indices_dict[index]:
-                                if stock:
-                                    new_row = dayweekmonth_datasets(stock, stock, index)
-                                    results_df = append_row(results_df, new_row)
+                    def generate_gfs_reports():
+                        df3 = generateGFS('indicesdf')
+                        df4 = df3.loc[
+                            df3['monthrsi14'].between(40, 60) &
+                            df3['weekrsi14'].between(40, 60) &
+                            df3['dayrsi14'].between(40, 60)
+                        ]
+                        
+                        st.markdown("### Qualified Indices")
+                        if df4.empty:
+                            st.warning("No indices meet GFS criteria.")
+                        else:
+                            st.dataframe(df4.style.format({
+                                'dayrsi14': '{:.2f}',
+                                'weekrsi14': '{:.2f}',
+                                'monthrsi14': '{:.2f}',
+                                'dltp': '{:.2f}'
+                            }), use_container_width=True)
+                            df4.to_csv(os.path.join(BASE_DIR, "filtered_indices.csv"), index=False)
+                        
+                        st.markdown("### Qualified Stocks")
+                        indices_dict = read_indicesstocks(os.path.join(BASE_DIR, "indicesstocks.csv"))
+                        results_df = pd.DataFrame(columns=df3.columns)
+                        for index in df4['indexcode']:
+                            if index in indices_dict:
+                                for stock in indices_dict[index]:
+                                    if stock:
+                                        new_row = dayweekmonth_datasets(stock, stock, index)
+                                        results_df = append_row(results_df, new_row)
+                        
+                        results_df = results_df.loc[
+                            results_df['monthrsi14'].between(40, 60) &
+                            results_df['weekrsi14'].between(40, 60) &
+                            results_df['dayrsi14'].between(40, 60)
+                        ]
+                        
+                        sectors_df = pd.read_csv(SECTORS_FILE)
+                        results_df = results_df.merge(
+                            sectors_df[['Index Name', 'Company Name']],
+                            left_on='indexname',
+                            right_on='Index Name',
+                            how='left'
+                        )
+                        results_df.drop(columns=['Index Name'], inplace=True, errors='ignore')
+                        results_df['Company Name'] = results_df['Company Name'].fillna('N/A')
+                        
+                        if results_df.empty:
+                            st.warning("No stocks meet GFS criteria.")
+                        else:
+                            st.dataframe(results_df.style.format({
+                                'dayrsi14': '{:.2f}',
+                                'weekrsi14': '{:.2f}',
+                                'monthrsi14': '{:.2f}',
+                                'dltp': '{:.2f}'
+                            }), use_container_width=True)
+                            results_df.to_csv(os.path.join(BASE_DIR, "filtered_indices_output.csv"), index=False)
+                        
+                        st.success("GFS Analysis completed!")
                     
-                    results_df = results_df.loc[
-                        results_df['monthrsi14'].between(40, 60) &
-                        results_df['weekrsi14'].between(40, 60) &
-                        results_df['dayrsi14'].between(40, 60)
-                    ]
-                    
-                    sectors_df = pd.read_csv(SECTORS_FILE)
-                    results_df = results_df.merge(
-                        sectors_df[['Index Name', 'Company Name']],
-                        left_on='indexname',
-                        right_on='Index Name',
-                        how='left'
-                    )
-                    results_df.drop(columns=['Index Name'], inplace=True, errors='ignore')
-                    results_df['Company Name'] = results_df['Company Name'].fillna('N/A')
-                    
-                    if results_df.empty:
-                        st.warning("No stocks meet GFS criteria.")
-                    else:
-                        st.dataframe(results_df.style.format({
-                            'dayrsi14': '{:.2f}',
-                            'weekrsi14': '{:.2f}',
-                            'monthrsi14': '{:.2f}',
-                            'dltp': '{:.2f}'
-                        }), use_container_width=True)
-                        results_df.to_csv(os.path.join(BASE_DIR, "filtered_indices_output.csv"), index=False)
-                    
-                    st.success("GFS Analysis completed!")
-                
-                generate_gfs_reports()
-                del st.session_state.data_choice
-                st.session_state.show_data_choice = False
+                    generate_gfs_reports()
+                    del st.session_state.data_choice
+                    st.session_state.show_data_choice = False
 
             elif st.session_state.data_choice == 'existing':
                 with st.spinner("Using existing data..."):
@@ -665,23 +729,21 @@ with tab1:
     )
     filtered_file = os.path.join(BASE_DIR, "filtered_indices_output.csv")
     if os.path.exists(filtered_file):
-        # Let the user choose which sentiment model to use
-        # IMPORTANT: keep it as "VADER" or "FinBERT" to match analyze_sentiment checks
-        sentiment_method = st.radio(
-            "Select Sentiment Analysis Model",
-            ("VADER", "FinBERT"),
-            index=0
-        )
+        sentiment_method = st.selectbox("Select Sentiment Analysis Model", ["VADER", "FinBERT"], index=0)
+        use_newsapi = st.checkbox("Keyword Specific (NewsAPI.org)", value=False)
+        aggregate_sources = st.checkbox("Aggregate Keywords & Multi-Sources", value=False)
         if st.button("Run News Sentiment Analysis"):
             with st.spinner("Analyzing news sentiment for each company..."):
                 sentiment_summary, updated_df, news_data = update_filtered_indices_by_sentiment(
                     filtered_file,
-                    sentiment_method
+                    sentiment_method,
+                    use_newsapi,
+                    aggregate_sources
                 )
             st.success("News Sentiment Analysis completed!")
 
             st.markdown("### Sentiment Summary")
-            summary_df = pd.DataFrame.from_dict(sentiment_summary, orient='index', columns=["Verdict"])
+            summary_df = pd.DataFrame.from_dict(sentiment_summary, orient='index')
             st.dataframe(summary_df)
 
             st.markdown("### Updated Filtered Indices")
@@ -741,106 +803,138 @@ with tab2:
             st.error(f"Error loading {file}: {e}")
 
     st.sidebar.header("LSTM Configuration")
-    epochs_input = st.sidebar.number_input("Number of Epochs", min_value=5, max_value=500, value=25)
+    epochs_input = st.sidebar.number_input("Number of Epochs", min_value=1, max_value=500, value=170)
     start_date = st.sidebar.date_input("Select Start Date", value=dt.date(2020, 1, 1))
     end_date = st.sidebar.date_input("Select End Date", value=dt.date.today())
     if start_date > end_date:
         st.error("Error: End date must fall after start date.")
         st.stop()
 
+    analysis_mode = st.selectbox("Select Analysis Mode", options=["Compare Multiple Stocks", "Single Stock Analysis"])
+
+    if analysis_mode == "Single Stock Analysis":
+        company_choice = st.selectbox("Select a Company", options=selected_indices['indexname'].unique())
+        companies_to_process = selected_indices[selected_indices['indexname'] == company_choice]
+    else:
+        companies_to_process = selected_indices
+
     if st.button("Run LSTM Analysis"):
         results = []
         current_date = dt.datetime.now().strftime("%Y-%m-%d")
-
-        for _, row in selected_indices.iterrows():
+        
+        if analysis_mode == "Compare Multiple Stocks":
+            combined_fig = go.Figure()
+        
+        for _, row in companies_to_process.iterrows():
             index_name = row['indexname']
-            if index_name in daily_data:
-                matching_rows = sectors_df[sectors_df['Index Name'] == index_name]
-                if not matching_rows.empty:
-                    company_name = matching_rows['Company Name'].iloc[0]
-                else:
-                    company_name = index_name
+            if index_name not in daily_data:
+                st.warning(f"Data for {index_name} not found. Skipping...")
+                continue
 
-                col_header, col_button = st.columns([4, 1])
-                with col_header:
-                    st.subheader(f"Processing {index_name} ({company_name})")
-                with col_button:
-                    yahoo_url = f"https://finance.yahoo.com/chart/{index_name}"
-                    # If you want a link button, you can use st.markdown with a link:
-                    st.markdown(f"[🗠 View Current Charts on Yahoo Finance]({yahoo_url})")
+            matching_rows = sectors_df[sectors_df['Index Name'] == index_name]
+            if not matching_rows.empty:
+                company_name = matching_rows['Company Name'].iloc[0]
+            else:
+                company_name = index_name
 
-                result = get_predicted_values(
-                    daily_data[index_name],
-                    epochs=epochs_input,
-                    start_date=start_date,
-                    end_date=end_date
-                )
-                if result is None:
-                    st.warning(f"Not enough data for {index_name}. Skipping...")
-                    continue
+            col_header, col_button = st.columns([4, 1])
+            with col_header:
+                st.subheader(f"Processing {index_name} ({company_name})")
+            with col_button:
+                yahoo_url = f"https://finance.yahoo.com/chart/{index_name}"
+                st.markdown(f"[🗠 View Current Charts on Yahoo Finance]({yahoo_url})")
 
-                (
-                    train_r2, test_r2, future_preds, future_high, future_low,
-                    train_dates, y_train_actual, train_pred,
-                    test_dates, y_test_actual, test_pred
-                ) = result
+            result = get_predicted_values(
+                daily_data[index_name],
+                epochs=epochs_input,
+                start_date=start_date,
+                end_date=end_date
+            )
+            if result is None:
+                st.warning(f"Not enough data for {index_name}. Skipping...")
+                continue
 
-                # Prepare dataframes for charting
-                train_plot_df = pd.DataFrame({
-                    'Date': pd.to_datetime(train_dates),
-                    'Actual': y_train_actual.flatten(),
-                    'Predicted': train_pred.flatten()
-                })
-                test_plot_df = pd.DataFrame({
-                    'Date': pd.to_datetime(test_dates),
-                    'Actual': y_test_actual.flatten(),
-                    'Predicted': test_pred.flatten()
-                })
+            (
+                train_r2, test_r2, future_preds, future_high, future_low,
+                train_dates, y_train_actual, train_pred,
+                test_dates, y_test_actual, test_pred
+            ) = result
 
-                col1, col2 = st.columns(2)
-                with col1:
-                    st.write(f"#### Training Data (R² = {train_r2:.4f})")
-                    st.line_chart(train_plot_df.set_index('Date'))
+            train_plot_df = pd.DataFrame({
+                'Date': pd.to_datetime(train_dates),
+                'Actual': y_train_actual.flatten(),
+                'Predicted': train_pred.flatten()
+            })
+            test_plot_df = pd.DataFrame({
+                'Date': pd.to_datetime(test_dates),
+                'Actual': y_test_actual.flatten(),
+                'Predicted': test_pred.flatten()
+            })
+            last_date_in_data = pd.to_datetime(daily_data[index_name]['Date']).max()
+            future_dates = pd.date_range(last_date_in_data + pd.Timedelta(days=1), periods=5, freq='B')[:5]
+            future_plot_df = pd.DataFrame({
+                'Date': future_dates,
+                'Predicted Close': future_preds,
+                'Predicted High': future_high,
+                'Predicted Low': future_low
+            })
 
-                with col2:
-                    st.write(f"#### Test Data (R² = {test_r2:.4f})")
-                    st.line_chart(test_plot_df.set_index('Date'))
+            fig_train = go.Figure()
+            fig_train.add_trace(go.Scatter(x=train_plot_df['Date'], y=train_plot_df['Actual'], mode='lines', name='Actual'))
+            fig_train.add_trace(go.Scatter(x=train_plot_df['Date'], y=train_plot_df['Predicted'], mode='lines', name='Predicted'))
+            fig_train.update_layout(title=f"Training Data for {index_name} (R² = {train_r2:.4f})",
+                                    dragmode="pan", xaxis_title="Date", yaxis_title="Price")
+            st.plotly_chart(fig_train, use_container_width=True)
 
-                last_date_in_data = pd.to_datetime(daily_data[index_name]['Date']).max()
-                future_dates = pd.date_range(last_date_in_data + pd.Timedelta(days=1), periods=5, freq='B')[:5]
-                future_plot_df = pd.DataFrame({
-                    'Date': future_dates,
-                    'Predicted Close': future_preds,
-                    'Predicted High': future_high,
-                    'Predicted Low': future_low
-                })
-                st.write("#### Future Predictions")
-                st.line_chart(future_plot_df.set_index('Date'))
+            fig_test = go.Figure()
+            fig_test.add_trace(go.Scatter(x=test_plot_df['Date'], y=test_plot_df['Actual'], mode='lines', name='Actual'))
+            fig_test.add_trace(go.Scatter(x=test_plot_df['Date'], y=test_plot_df['Predicted'], mode='lines', name='Predicted'))
+            fig_test.update_layout(title=f"Test Data for {index_name} (R² = {test_r2:.4f})",
+                                   dragmode="pan", xaxis_title="Date", yaxis_title="Price")
+            st.plotly_chart(fig_test, use_container_width=True)
 
-                # Collect results for summary
-                results.append({
-                    'Run Date': current_date,
-                    'Index Name': index_name,
-                    'Company Name': company_name,
-                    'Model': 'LSTM',
-                    'Train R2 Score': train_r2,
-                    'Test R2 Score': test_r2,
-                    'Close Day 1': future_preds[0],
-                    'Close Day 2': future_preds[1],
-                    'Close Day 3': future_preds[2],
-                    'Close Day 4': future_preds[3],
-                    'Close Day 5': future_preds[4],
-                    'High Day 1': future_high[0],
-                    'High Day 2': future_high[1],
-                    'High Day 3': future_high[2],
-                    'High Day 4': future_high[3],
-                    'High Day 5': future_high[4],
-                    'Low Day 1': future_low[0],
-                    'Low Day 2': future_low[1],
-                    'Low Day 3': future_low[2],
-                    'Low Day 4': future_low[3],
-                    'Low Day 5': future_low[4]
-                })
+            fig_future = go.Figure()
+            fig_future.add_trace(go.Scatter(x=future_plot_df['Date'], y=future_plot_df['Predicted Close'], mode='lines+markers', name='Predicted Close'))
+            fig_future.add_trace(go.Scatter(x=future_plot_df['Date'], y=future_plot_df['Predicted High'], mode='lines+markers', name='Predicted High'))
+            fig_future.add_trace(go.Scatter(x=future_plot_df['Date'], y=future_plot_df['Predicted Low'], mode='lines+markers', name='Predicted Low'))
+            fig_future.update_layout(title=f"Future Predictions for {index_name}", dragmode="pan", xaxis_title="Date", yaxis_title="Price")
+            
+            if analysis_mode == "Single Stock Analysis":
+                st.plotly_chart(fig_future, use_container_width=True)
+                st.markdown("#### Next 5 Days Predictions")
+                st.table(future_plot_df)
+            else:
+                combined_fig.add_trace(go.Scatter(x=future_plot_df['Date'], y=future_plot_df['Predicted Close'], mode='lines+markers', name=index_name))
+                with st.expander(f"Next 5 Days Predictions for {index_name}"):
+                    st.table(future_plot_df)
+
+            results.append({
+                'Run Date': current_date,
+                'Index Name': index_name,
+                'Company Name': company_name,
+                'Model': 'LSTM',
+                'Train R2 Score': train_r2,
+                'Test R2 Score': test_r2,
+                'Close Day 1': future_preds[0],
+                'Close Day 2': future_preds[1],
+                'Close Day 3': future_preds[2],
+                'Close Day 4': future_preds[3],
+                'Close Day 5': future_preds[4],
+                'High Day 1': future_high[0],
+                'High Day 2': future_high[1],
+                'High Day 3': future_high[2],
+                'High Day 4': future_high[3],
+                'High Day 5': future_high[4],
+                'Low Day 1': future_low[0],
+                'Low Day 2': future_low[1],
+                'Low Day 3': future_low[2],
+                'Low Day 4': future_low[3],
+                'Low Day 5': future_low[4]
+            })
+
+        if analysis_mode == "Compare Multiple Stocks":
+            combined_fig.update_layout(title="Comparison of Future Predicted Close Prices (Next 5 Days)", dragmode="pan", xaxis_title="Date", yaxis_title="Price")
+            st.plotly_chart(combined_fig, use_container_width=True)
 
         if results:
             result_df = pd.DataFrame(results)
@@ -865,7 +959,6 @@ with tab2:
                 'Low Day 5': '{:.2f}'
             }))
 
-            # Add a 'Verdict' column based on test R2 score
             result_df['Verdict'] = result_df['Test R2 Score'].apply(
                 lambda x: "Strong Forecast" if x >= 0.9 else ("Moderate Forecast" if x >= 0.8 else "Weak Forecast")
             )
