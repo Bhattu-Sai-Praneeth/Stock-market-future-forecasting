@@ -10,8 +10,7 @@ from transformers import pipeline
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
-# Download NLTK resources
-nltk.download('vader_lexicon')
+# Download NLTK resources on first use
 
 # List of rotating User-Agents
 USER_AGENTS = [
@@ -32,11 +31,15 @@ session = get_session()
 # Initialize sentiment analyzers
 @st.cache_resource
 def load_vader():
+    try:
+        nltk.data.find("sentiment/vader_lexicon.zip")
+    except LookupError:
+        nltk.download("vader_lexicon", quiet=True)
     return SentimentIntensityAnalyzer()
 
 @st.cache_resource
 def load_finbert():
-    return pipeline("text-classification", model="ProsusAI/finbert")
+    return pipeline("text-classification", model="ProsusAI/finbert", framework="pt")
 
 def scrape_moneycontrol_news(company):
     search_url = f"https://www.moneycontrol.com/news/tags/{company.replace(' ', '-').lower()}.html"

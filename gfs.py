@@ -1,25 +1,11 @@
 import os
 import streamlit as st
-
-# --- Fix pandas-ta issue before importing ---
-file_path = "/home/adminuser/venv/lib/python3.10/site-packages/pandas_ta/momentum/squeeze_pro.py"
-
-if os.path.exists(file_path):
-    with open(file_path, "r") as file:
-        content = file.read()
-    # Fix the NaN import issue
-    if "from numpy import NaN as npNaN" in content:
-        content = content.replace("from numpy import NaN as npNaN", "import numpy as np\nnpNaN = np.nan")
-        with open(file_path, "w") as file:
-            file.write(content)
-import streamlit as st
 import yfinance as yf
 import pandas as pd
 import numpy as np
 import datetime as dt
-import os
 from pathlib import Path
-import pandas_ta as ta
+import pandas_ta_classic as ta
 from sklearn.metrics import r2_score
 from sklearn.preprocessing import MinMaxScaler
 from tensorflow.keras.models import Sequential
@@ -38,16 +24,15 @@ from transformers import pipeline
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
-# Ensure VADER lexicon is downloaded
-nltk.download('vader_lexicon')
-
 # -----------------------------
 # Configuration & Paths
 # -----------------------------
 st.set_page_config(page_title="Stock Analysis & Prediction Dashboard", layout="wide")
 
-# Set up directories (adjust BASE_DIR as needed)
-BASE_DIR = r"C:\Users\saipr\OneDrive\Desktop\MAIN UPDATED PROJECT\DATASETS"
+# Use the bundled DATASETS folder by default; override with STOCK_DATA_DIR.
+BASE_DIR = os.environ.get(
+    "STOCK_DATA_DIR", str(Path(__file__).resolve().parent / "DATASETS")
+)
 DAILY_DIR = os.path.join(BASE_DIR, "Daily_data")
 WEEKLY_DIR = os.path.join(BASE_DIR, "Weekly_data")
 MONTHLY_DIR = os.path.join(BASE_DIR, "Monthly_data")
@@ -321,11 +306,15 @@ USER_AGENTS = [
 
 @st.cache_resource
 def load_vader():
+    try:
+        nltk.data.find("sentiment/vader_lexicon.zip")
+    except LookupError:
+        nltk.download("vader_lexicon", quiet=True)
     return SentimentIntensityAnalyzer()
 
 @st.cache_resource
 def load_finbert():
-    return pipeline("text-classification", model="ProsusAI/finbert")
+    return pipeline("text-classification", model="ProsusAI/finbert", framework="pt")
 
 def scrape_moneycontrol_news(company):
     search_url = f"https://www.moneycontrol.com/news/tags/{company.replace(' ', '-').lower()}.html"
