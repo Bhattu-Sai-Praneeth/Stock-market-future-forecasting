@@ -1,3 +1,7 @@
 @echo off
-cd /d "C:\Users\saipr\OneDrive\Desktop\MAIN UPDATED PROJECT"
-pip install streamlit pandas numpy requests beautifulsoup4 nltk transformers torch pandas-ta scikit-learn tensorflow yfinance plotly
+setlocal
+cd /d "%~dp0"
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+python -m nltk.downloader vader_lexicon
+echo Dependencies installed. Start the app with: python -m streamlit run gfs.py

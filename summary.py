@@ -4,7 +4,7 @@ import pandas as pd
 import numpy as np
 import datetime as dt
 from pathlib import Path
-import pandas_ta as ta
+import pandas_ta_classic as ta
 from sklearn.metrics import r2_score
 from sklearn.preprocessing import MinMaxScaler
 from tensorflow.keras.models import Sequential
@@ -23,14 +23,13 @@ from transformers import pipeline
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
-# Ensure VADER lexicon is downloaded
-nltk.download('vader_lexicon')
-
 # -----------------------------
 # Configuration & Paths
 # -----------------------------
-# (Adjust BASE_DIR as needed; this is your local datasets folder)
-BASE_DIR = r"C:\Users\saipr\OneDrive\Desktop\MAIN UPDATED PROJECT\DATASETS"
+# Use the bundled DATASETS folder by default; override with STOCK_DATA_DIR.
+BASE_DIR = os.environ.get(
+    "STOCK_DATA_DIR", str(Path(__file__).resolve().parent / "DATASETS")
+)
 DAILY_DIR = os.path.join(BASE_DIR, "Daily_data")
 WEEKLY_DIR = os.path.join(BASE_DIR, "Weekly_data")
 MONTHLY_DIR = os.path.join(BASE_DIR, "Monthly_data")
@@ -296,10 +295,14 @@ USER_AGENTS = [
 ]
 
 def load_vader():
+    try:
+        nltk.data.find("sentiment/vader_lexicon.zip")
+    except LookupError:
+        nltk.download("vader_lexicon", quiet=True)
     return SentimentIntensityAnalyzer()
 
 def load_finbert():
-    return pipeline("text-classification", model="ProsusAI/finbert")
+    return pipeline("text-classification", model="ProsusAI/finbert", framework="pt")
 
 def scrape_moneycontrol_news(company):
     search_url = f"https://www.moneycontrol.com/news/tags/{company.replace(' ', '-').lower()}.html"
